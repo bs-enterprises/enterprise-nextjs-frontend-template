@@ -15,6 +15,7 @@ import {
   Search,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { useLayoutContext } from '@/contexts/layout-context';
 import { Button } from '@/components/ui/button';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@/components/ui/sheet';
 import { Input } from '@/components/ui/input';
@@ -72,8 +73,10 @@ export function AppShell({
   });
 
   const collapsed = controlledCollapsed ?? internalCollapsed;
+  const { setSidebarCollapsed } = useLayoutContext();
 
   const setCollapsed = (value: boolean) => {
+    setSidebarCollapsed(value);
     if (onCollapsedChange) {
       onCollapsedChange(value);
     } else {
