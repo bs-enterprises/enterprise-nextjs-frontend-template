@@ -8,6 +8,7 @@ import {
   X,
   ChevronLeft,
   ChevronRight,
+  ChevronDown,
   Menu,
   Grid3x3,
   Pin,
@@ -199,6 +200,112 @@ export function AppShell({
   );
 }
 
+// ==================== NAV ITEM ====================
+
+function isItemActive(item: MenuItem, pathname: string): boolean {
+  if (item.isActive) return item.isActive(pathname);
+  if (item.exact) return pathname === item.href;
+  return pathname === item.href || pathname.startsWith(item.href + '/');
+}
+
+function isAnyChildActive(item: MenuItem, pathname: string): boolean {
+  return (item.children ?? []).some((child) => isItemActive(child, pathname));
+}
+
+interface NavItemProps {
+  item: MenuItem;
+  collapsed: boolean;
+  pathname: string;
+  onClose: () => void;
+  /** depth > 0 = sub-item, renders indented */
+  depth?: number;
+}
+
+function NavItem({ item, collapsed, pathname, onClose, depth = 0 }: NavItemProps) {
+  const hasChildren = (item.children?.length ?? 0) > 0;
+  const childActive = hasChildren && isAnyChildActive(item, pathname);
+  const [open, setOpen] = useState(() => item.defaultOpen ?? childActive);
+  const active = isItemActive(item, pathname);
+
+  // If a child becomes active later (e.g. browser navigation), auto-open
+  // We use a simple effect: when childActive flips to true and we're not open, open.
+  if (childActive && !open && !collapsed) {
+    setOpen(true);
+  }
+
+  if (hasChildren) {
+    return (
+      <div>
+        {/* Group header button */}
+        <button
+          onClick={() => !collapsed && setOpen((o) => !o)}
+          title={collapsed ? item.label : undefined}
+          className={cn(
+            'flex items-center gap-3 h-10 px-3 rounded-md text-sm w-full',
+            'transition-colors duration-150',
+            (childActive || active)
+              ? 'text-foreground font-medium'
+              : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground',
+            collapsed && 'justify-center'
+          )}
+        >
+          <item.icon className={cn('shrink-0', collapsed ? 'h-5 w-5' : 'h-[18px] w-[18px]')} />
+          {!collapsed && (
+            <>
+              <span className="truncate flex-1 text-left">{item.label}</span>
+              <ChevronDown
+                className={cn(
+                  'h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform duration-200',
+                  open && 'rotate-180'
+                )}
+              />
+            </>
+          )}
+        </button>
+
+        {/* Children */}
+        {!collapsed && open && (
+          <div className="ml-3 pl-3 border-l border-border/40 space-y-0.5 mt-0.5 mb-1">
+            {item.children!.map((child) => (
+              <NavItem
+                key={child.id}
+                item={child}
+                collapsed={false}
+                pathname={pathname}
+                onClose={onClose}
+                depth={depth + 1}
+              />
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // Leaf item
+  return (
+    <Link
+      href={item.href}
+      onClick={onClose}
+      title={collapsed ? item.label : undefined}
+      className={cn(
+        'flex items-center gap-3 h-9 px-3 rounded-md text-sm',
+        'transition-colors duration-150',
+        active
+          ? depth > 0
+            ? 'bg-primary/10 text-primary font-medium'
+            : 'bg-primary text-primary-foreground font-medium shadow-sm'
+          : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground',
+        collapsed && 'justify-center',
+        depth > 0 && 'text-[13px]'
+      )}
+    >
+      <item.icon className={cn('shrink-0', collapsed ? 'h-5 w-5' : 'h-[15px] w-[15px]')} />
+      {!collapsed && <span className="truncate">{item.label}</span>}
+    </Link>
+  );
+}
+
 // ==================== SIDEBAR CONTENT ====================
 
 interface SidebarContentProps {
@@ -240,12 +347,6 @@ function AppShellSidebarContent({
     }
     return sorted;
   }, [allMenuItems, pinnedMenuIds, useMenuPicker]);
-
-  const isActive = (item: MenuItem) => {
-    if (item.isActive) return item.isActive(pathname);
-    if (item.exact) return pathname === item.href;
-    return pathname === item.href || pathname.startsWith(item.href + '/');
-  };
 
   return (
     <div className="flex h-full flex-col w-full">
@@ -293,27 +394,14 @@ function AppShellSidebarContent({
         <div className="space-y-0.5">
           {displayItems.map((item) => {
             if (item.permission && !item.permission()) return null;
-            const active = isActive(item);
             return (
-              <Link
+              <NavItem
                 key={item.id}
-                href={item.href}
-                onClick={onCloseMobileMenu}
-                className={cn(
-                  'flex items-center gap-3 h-10 px-3 rounded-md text-sm',
-                  'transition-colors duration-150',
-                  active
-                    ? 'bg-primary text-primary-foreground font-medium shadow-sm'
-                    : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground',
-                  collapsed && 'justify-center'
-                )}
-                title={collapsed ? item.label : undefined}
-              >
-                <item.icon
-                  className={cn('shrink-0', collapsed ? 'h-5 w-5' : 'h-[18px] w-[18px]')}
-                />
-                {!collapsed && <span className="truncate">{item.label}</span>}
-              </Link>
+                item={item}
+                collapsed={collapsed}
+                pathname={pathname}
+                onClose={onCloseMobileMenu}
+              />
             );
           })}
         </div>

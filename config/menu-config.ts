@@ -26,6 +26,10 @@ export interface MenuItem {
   isActive?: (pathname: string) => boolean;
   exact?: boolean;
   permission?: () => boolean;
+  /** Sub-navigation items — renders as a collapsible group */
+  children?: MenuItem[];
+  /** Auto-expand the group on first render */
+  defaultOpen?: boolean;
 }
 
 export interface MenuCategory {
