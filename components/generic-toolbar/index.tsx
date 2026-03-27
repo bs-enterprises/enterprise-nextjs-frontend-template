@@ -1,16 +1,16 @@
 'use client';
 
-import { useState, useCallback } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Checkbox } from '@/components/ui/checkbox';
-import { Separator } from '@/components/ui/separator';
-import { Card } from '@/components/ui/card';
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import {
@@ -33,13 +33,45 @@ import {
   GenericToolbarProps,
   ActiveFilter,
   FilterField,
-  FilterOperator,
-  SortState,
+  OPERATOR_LABELS,
+  ExternalFilterController,
 } from './types';
+import { FilterPanel } from './filter-panel';
 
-export type { GenericToolbarProps, FilterField, ActiveFilter, SortState } from './types';
+// ── Re-exports ────────────────────────────────────────────────────────────────
+export type {
+  GenericToolbarProps,
+  FilterField,
+  FilterOption,
+  ActiveFilter,
+  SortField,
+  SortState,
+  ColumnConfig,
+  CustomAction,
+  FilterOperator,
+  ExternalFilterController,
+  FilterFieldType,
+} from './types';
+export {
+  OPERATOR_LABELS,
+  OPERATORS_BY_FIELD_TYPE,
+  DEFAULT_OPERATOR_BY_FIELD_TYPE,
+} from './types';
+export { buildUniversalSearchRequest } from './search-builder';
 
-/* ── small helpers ─────────────────────────────────────────────────────────── */
+// ── helpers ───────────────────────────────────────────────────────────────────
+
+/** Decides whether a filter should count as "active" for the badge count */
+function isFilterActive(f: ActiveFilter): boolean {
+  if (f.operator === 'today') return true;
+  if (f.value === null || f.value === undefined || f.value === '') return false;
+  if (Array.isArray(f.value)) return (f.value as unknown[]).length > 0;
+  return true;
+}
+
+// ── FilterTag ─────────────────────────────────────────────────────────────────
+// Shown in the collapsed state when the filter panel is closed but filters are active.
+
 function FilterTag({
   filter,
   field,
@@ -49,97 +81,48 @@ function FilterTag({
   field?: FilterField;
   onRemove: () => void;
 }) {
-  const label = field?.label ?? filter.filterId;
-  const val = Array.isArray(filter.value) ? filter.value.join(', ') : String(filter.value ?? '');
+  const label   = field?.label ?? filter.filterId;
+  const opLabel = OPERATOR_LABELS[filter.operator] ?? filter.operator;
+  const noValue = filter.operator === 'today';
+  const valLabel = noValue
+    ? ''
+    : Array.isArray(filter.value)
+    ? (filter.value as string[]).join(', ')
+    : String(filter.value ?? '');
 
   return (
-    <Badge variant="secondary" className="gap-1 pr-1 text-xs">
-      <span className="opacity-70">{label}:</span>
-      <span>{val || filter.operator}</span>
-      <button onClick={onRemove} className="ml-0.5 hover:text-destructive transition-colors">
+    <Badge variant="secondary" className="gap-1 pr-1 text-xs font-normal">
+      <span className="font-medium">{label}</span>
+      <span className="opacity-60">{opLabel}</span>
+      {valLabel && <span className="font-medium">{valLabel}</span>}
+      <button
+        onClick={onRemove}
+        className="ml-0.5 rounded-sm p-px hover:text-destructive transition-colors"
+        aria-label={`Remove ${label} filter`}
+      >
         <X className="h-3 w-3" />
       </button>
     </Badge>
   );
 }
 
-function BasicFilterRow({
-  filter,
-  field,
-  onChange,
-  onRemove,
-}: {
-  filter: ActiveFilter;
-  field: FilterField;
-  onChange: (updated: ActiveFilter) => void;
-  onRemove: () => void;
-}) {
-  if (field.type === 'select' || field.type === 'multi_select') {
-    const options = field.options ?? [];
-    return (
-      <div className="flex items-center gap-2 flex-wrap">
-        <span className="text-xs font-medium w-24 shrink-0">{field.label}</span>
-        <div className="flex flex-wrap gap-1">
-          {options.map((opt) => {
-            const vals = (filter.value as string[]) ?? [];
-            const selected = vals.includes(opt.value);
-            return (
-              <button
-                key={opt.value}
-                onClick={() => {
-                  const next = selected
-                    ? vals.filter((v) => v !== opt.value)
-                    : [...vals, opt.value];
-                  onChange({ ...filter, value: next, operator: 'in' });
-                }}
-                className={cn(
-                  'text-xs px-2 py-0.5 rounded-full border transition-colors',
-                  selected
-                    ? 'bg-primary text-primary-foreground border-primary'
-                    : 'bg-background border-border hover:border-primary'
-                )}
-              >
-                {opt.label}
-              </button>
-            );
-          })}
-        </div>
-        <Button variant="ghost" size="icon" className="h-6 w-6 ml-auto" onClick={onRemove}>
-          <X className="h-3 w-3" />
-        </Button>
-      </div>
-    );
-  }
+// ── GenericToolbar ─────────────────────────────────────────────────────────────
 
-  return (
-    <div className="flex items-center gap-2">
-      <span className="text-xs font-medium w-24 shrink-0">{field.label}</span>
-      <Input
-        className="h-8 text-sm flex-1"
-        placeholder={field.placeholder ?? `Filter by ${field.label}…`}
-        value={(filter.value as string) ?? ''}
-        onChange={(e) => onChange({ ...filter, value: e.target.value, operator: 'contains' })}
-      />
-      <Button variant="ghost" size="icon" className="h-7 w-7 shrink-0" onClick={onRemove}>
-        <X className="h-3 w-3" />
-      </Button>
-    </div>
-  );
-}
-
-/* ── GenericToolbar ─────────────────────────────────────────────────────────── */
 /**
- * GenericToolbar — full-featured list/table toolbar with:
- *  - instant search
- *  - collapsible filter panel (basic mode)
- *  - sort dropdown
- *  - column-visibility toggle
- *  - export dropdown
- *  - add button
- *  - bulk-selection toggle
- *  - custom action slots
+ * GenericToolbar — fully controlled, reusable table/list toolbar.
  *
- * All features are opt-in via props; unused features are simply not rendered.
+ * Features (all opt-in via props):
+ *  - Instant search (fully controlled, syncs with `searchValue` prop)
+ *  - Collapsible filter panel (Basic / Advanced) with field-type-aware inputs
+ *  - Operator selector per filter in Advanced mode (contains / equals / ≥ / between / …)
+ *  - Filter count badge on the Filters button
+ *  - Active filter tags shown when panel is collapsed
+ *  - Sort dropdown (cycles Asc → Desc → none)
+ *  - Column-visibility toggle with checkboxes
+ *  - Export dropdown (All / Results)
+ *  - Add button
+ *  - Bulk-selection toggle
+ *  - Custom action slots
  */
 export function GenericToolbar({
   searchValue = '',
@@ -151,6 +134,7 @@ export function GenericToolbar({
   availableFilters = [],
   activeFilters = [],
   onFiltersChange,
+  externalFilterControllers = [],
 
   showSort = false,
   sortableFields = [],
@@ -173,69 +157,152 @@ export function GenericToolbar({
   showBulkActions = false,
   selectionMode = false,
   onToggleSelection,
+  bulkActions = [],
+  selectedCount = 0,
 
   customActions = [],
 
   className,
 }: GenericToolbarProps) {
-  const [localSearch, setLocalSearch] = useState(searchValue);
+  // ── Controlled search ──────────────────────────────────────────────────────
+  const [inputValue, setInputValue] = useState(searchValue);
+  const isExternalChange = useRef(false);
+  const searchDebounceRef = useRef<NodeJS.Timeout | null>(null);
+  const [hasUnappliedSearchChange, setHasUnappliedSearchChange] = useState(false);
+
+  useEffect(() => {
+    if (searchValue !== inputValue) {
+      isExternalChange.current = true;
+      setInputValue(searchValue);
+      setHasUnappliedSearchChange(false);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchValue]);
+
+  // Cleanup debounce timer on unmount
+  useEffect(() => {
+    return () => {
+      if (searchDebounceRef.current) {
+        clearTimeout(searchDebounceRef.current);
+      }
+    };
+  }, []);
+
+  const handleSearchChange = (val: string) => {
+    setInputValue(val);
+    if (!isExternalChange.current) {
+      // Set 2-second debounce timer for auto-search
+      setHasUnappliedSearchChange(true);
+      if (searchDebounceRef.current) {
+        clearTimeout(searchDebounceRef.current);
+      }
+      searchDebounceRef.current = setTimeout(() => {
+        onSearchChange?.(val);
+        setHasUnappliedSearchChange(false);
+      }, 2000); // 2 seconds as requested
+    }
+    isExternalChange.current = false;
+  };
+
+  const handleSearchKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') {
+      // Immediately apply search on Enter key
+      if (searchDebounceRef.current) {
+        clearTimeout(searchDebounceRef.current);
+      }
+      onSearchChange?.(inputValue);
+      setHasUnappliedSearchChange(false);
+    }
+  };
+
+  const clearSearch = () => {
+    setInputValue('');
+    if (searchDebounceRef.current) {
+      clearTimeout(searchDebounceRef.current);
+    }
+    onSearchChange?.('');
+    setHasUnappliedSearchChange(false);
+  };
+
+  // ── Filters ────────────────────────────────────────────────────────────────
   const [filtersOpen, setFiltersOpen] = useState(false);
 
-  /* search */
-  const handleSearchChange = useCallback(
-    (val: string) => {
-      setLocalSearch(val);
-      onSearchChange?.(val);
-    },
-    [onSearchChange]
-  );
+  // Calculate external filter IDs (filters managed by external components)
+  const externalFilterIds = new Set<string>();
+  externalFilterControllers.forEach(controller => {
+    controller.representedFilters.forEach(rf => {
+      externalFilterIds.add(rf.filterId);
+    });
+  });
 
-  /* filters */
-  const addFilter = (field: FilterField) => {
-    if (activeFilters.find((f) => f.filterId === field.id)) return;
-    const blank: ActiveFilter = {
-      filterId: field.id,
-      operator: field.type === 'select' || field.type === 'multi_select' ? 'in' : 'contains',
-      value: field.type === 'select' || field.type === 'multi_select' ? [] : '',
-    };
-    onFiltersChange?.([...activeFilters, blank]);
-  };
-
-  const updateFilter = (updated: ActiveFilter) => {
-    onFiltersChange?.(activeFilters.map((f) => (f.filterId === updated.filterId ? updated : f)));
-  };
+  // Get user-managed filters (excluding external ones from display/count)
+  const userFilters = activeFilters.filter(f => !externalFilterIds.has(f.filterId));
 
   const removeFilter = (filterId: string) => {
-    onFiltersChange?.(activeFilters.filter((f) => f.filterId !== filterId));
+    // Only remove user filters, preserve external ones
+    const newUserFilters = userFilters.filter((f) => f.filterId !== filterId);
+    
+    // Merge with external filters and notify parent
+    const externalFilters: ActiveFilter[] = [];
+    externalFilterControllers.forEach((controller, controllerIndex) => {
+      controller.representedFilters.forEach((rf, filterIndex) => {
+        externalFilters.push({
+          filterId: rf.filterId,
+          operator: rf.operator,
+          value: rf.value,
+        });
+      });
+    });
+    
+    onFiltersChange?.([...externalFilters, ...newUserFilters]);
   };
 
-  const clearAllFilters = () => onFiltersChange?.([]);
+  const clearAllFilters = () => {
+    // Clear only user filters, preserve external ones
+    const externalFilters: ActiveFilter[] = [];
+    externalFilterControllers.forEach((controller, controllerIndex) => {
+      controller.representedFilters.forEach((rf, filterIndex) => {
+        externalFilters.push({
+          filterId: rf.filterId,
+          operator: rf.operator,
+          value: rf.value,
+        });
+      });
+    });
+    
+    onFiltersChange?.(externalFilters);
+  };
 
-  const activeCount = activeFilters.filter((f) => {
-    if (f.operator === 'today' || f.operator === 'is_null' || f.operator === 'is_not_null') return true;
-    if (f.value === null || f.value === undefined || f.value === '') return false;
-    if (Array.isArray(f.value)) return f.value.length > 0;
-    return true;
-  }).length;
+  const activeCount = userFilters.filter(isFilterActive).length;
 
+  // ── Render ─────────────────────────────────────────────────────────────────
   return (
-    <div className={cn('space-y-3', className)}>
+    <div className={cn('space-y-2.5', className)}>
+
       {/* ── Main row ── */}
       <div className="flex flex-col sm:flex-row gap-2">
+
         {/* Search */}
         {showSearch && (
           <div className="relative flex-1">
             <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground pointer-events-none" />
             <Input
               placeholder={searchPlaceholder}
-              value={localSearch}
+              value={inputValue}
               onChange={(e) => handleSearchChange(e.target.value)}
-              className="pl-9"
+              onKeyDown={handleSearchKeyDown}
+              className="pl-9 pr-9 h-9 focus-visible:ring-0 focus-visible:ring-offset-0"
             />
-            {localSearch && (
+            {hasUnappliedSearchChange && (
+              <span className="absolute right-10 top-1/2 -translate-y-1/2 text-xs text-amber-600 font-medium whitespace-nowrap pointer-events-none">
+                Press Enter
+              </span>
+            )}
+            {inputValue && (
               <button
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-                onClick={() => handleSearchChange('')}
+                aria-label="Clear search"
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+                onClick={clearSearch}
               >
                 <XCircle className="h-4 w-4" />
               </button>
@@ -243,58 +310,64 @@ export function GenericToolbar({
           </div>
         )}
 
-        {/* Action buttons */}
-        <div className="flex items-center gap-2 flex-wrap">
+        {/* Right-side buttons */}
+        <div className="flex items-center gap-1.5 flex-wrap">
+
           {/* Filters toggle */}
           {showFilters && availableFilters.length > 0 && (
             <Button
               variant="outline"
-              className="gap-2"
-              onClick={() => setFiltersOpen(!filtersOpen)}
+              size="sm"
+              className="h-9 gap-1.5"
+              onClick={() => setFiltersOpen((o) => !o)}
             >
-              <SlidersHorizontal className="h-4 w-4" />
-              <span className="hidden sm:inline">Filters</span>
+              <SlidersHorizontal className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline text-sm">Filters</span>
               {activeCount > 0 && (
-                <span className="ml-1 bg-primary text-primary-foreground rounded-full px-1.5 text-xs">
+                <span className="bg-primary text-primary-foreground rounded-full px-1.5 text-xs leading-none py-0.5">
                   {activeCount}
                 </span>
               )}
-              {filtersOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+              {filtersOpen
+                ? <ChevronUp className="h-3.5 w-3.5" />
+                : <ChevronDown className="h-3.5 w-3.5" />}
             </Button>
           )}
 
-          {/* Columns */}
+          {/* Column toggle */}
           {showConfigureView && allColumns.length > 0 && (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="outline" className="gap-2">
-                  <Settings2 className="h-4 w-4" />
-                  <span className="hidden sm:inline">Columns</span>
-                  <ChevronDown className="h-4 w-4" />
+                <Button variant="outline" size="sm" className="h-9 gap-1.5">
+                  <Settings2 className="h-3.5 w-3.5" />
+                  <span className="hidden sm:inline text-sm">Columns</span>
+                  <ChevronDown className="h-3 w-3 text-muted-foreground" />
                 </Button>
               </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-52">
-                <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground uppercase tracking-wide">
-                  Toggle Columns
-                </div>
-                <Separator className="my-1" />
-                <div className="max-h-72 overflow-y-auto">
+              <DropdownMenuContent align="end" className="w-48">
+                <DropdownMenuLabel className="text-xs text-muted-foreground font-semibold uppercase tracking-wide py-1.5">
+                  Toggle columns
+                </DropdownMenuLabel>
+                <DropdownMenuSeparator />
+                <div className="max-h-72 overflow-y-auto py-1">
                   {allColumns.map((col) => {
                     const visible = visibleColumns.includes(col.id);
                     return (
                       <div
                         key={col.id}
-                        className="flex items-center gap-2 px-2 py-1.5 cursor-pointer hover:bg-accent rounded-sm"
+                        role="menuitemcheckbox"
+                        aria-checked={visible}
+                        className="flex items-center gap-2 px-2 py-1.5 cursor-pointer hover:bg-accent rounded-sm select-none"
                         onClick={() =>
                           onVisibleColumnsChange?.(
                             visible
                               ? visibleColumns.filter((id) => id !== col.id)
-                              : [...visibleColumns, col.id]
+                              : [...visibleColumns, col.id],
                           )
                         }
                       >
                         <Checkbox checked={visible} className="pointer-events-none" />
-                        <span className="text-sm flex-1">{col.label}</span>
+                        <span className="text-sm">{col.label}</span>
                       </div>
                     );
                   })}
@@ -307,10 +380,10 @@ export function GenericToolbar({
           {showExport && (onExportAll || onExportResults) && (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="outline" className="gap-2">
-                  <Download className="h-4 w-4" />
-                  <span className="hidden sm:inline">Export</span>
-                  <ChevronDown className="h-4 w-4" />
+                <Button variant="outline" size="sm" className="h-9 gap-1.5">
+                  <Download className="h-3.5 w-3.5" />
+                  <span className="hidden sm:inline text-sm">Export</span>
+                  <ChevronDown className="h-3 w-3 text-muted-foreground" />
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">
@@ -328,39 +401,49 @@ export function GenericToolbar({
           {showSort && sortableFields.length > 0 && onSortChange && (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="outline" className="gap-2">
-                  <ArrowUpDown className="h-4 w-4" />
-                  <span className="hidden sm:inline">Sort</span>
-                  {currentSort &&
-                    (currentSort.direction === 1 ? (
-                      <ArrowUp className="h-3 w-3 text-muted-foreground" />
-                    ) : (
-                      <ArrowDown className="h-3 w-3 text-muted-foreground" />
-                    ))}
-                  <ChevronDown className="h-4 w-4" />
+                <Button
+                  variant={currentSort ? 'default' : 'outline'}
+                  size="sm"
+                  className="h-9 gap-1.5"
+                >
+                  <ArrowUpDown className="h-3.5 w-3.5" />
+                  <span className="hidden sm:inline text-sm">
+                    {currentSort
+                      ? sortableFields.find((f) => f.id === currentSort.field)?.label ?? 'Sort'
+                      : 'Sort'}
+                  </span>
+                  {currentSort && (
+                    currentSort.direction === 1
+                      ? <ArrowUp className="h-3 w-3" />
+                      : <ArrowDown className="h-3 w-3" />
+                  )}
+                  {!currentSort && <ChevronDown className="h-3 w-3 text-muted-foreground" />}
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="w-52">
+                <DropdownMenuLabel className="text-xs text-muted-foreground font-semibold uppercase tracking-wide py-1.5">
+                  Sort by
+                </DropdownMenuLabel>
+                <DropdownMenuSeparator />
                 {sortableFields.map((field) => {
-                  const active = currentSort?.field === field.id;
+                  const active    = currentSort?.field === field.id;
+                  const direction = currentSort?.direction;
                   return (
                     <DropdownMenuItem
                       key={field.id}
                       className="flex items-center justify-between"
                       onClick={() => {
-                        if (!active) return onSortChange({ field: field.id, direction: 1 });
-                        if (currentSort?.direction === 1) return onSortChange({ field: field.id, direction: -1 });
+                        if (!active)         return onSortChange({ field: field.id, direction: 1 });
+                        if (direction === 1) return onSortChange({ field: field.id, direction: -1 });
                         onSortChange(null);
                       }}
                     >
                       <span>{field.label}</span>
                       {active && (
-                        <span className="flex items-center gap-1 text-xs">
-                          {currentSort?.direction === 1 ? (
-                            <><ArrowUp className="h-3 w-3" /> Asc</>
-                          ) : (
-                            <><ArrowDown className="h-3 w-3" /> Desc</>
-                          )}
+                        <span className="flex items-center gap-1 text-xs text-muted-foreground">
+                          {direction === 1
+                            ? <><ArrowUp className="h-3 w-3" /> Asc</>
+                            : <><ArrowDown className="h-3 w-3" /> Desc</>}
                         </span>
                       )}
                     </DropdownMenuItem>
@@ -368,12 +451,12 @@ export function GenericToolbar({
                 })}
                 {currentSort && (
                   <>
-                    <Separator className="my-1" />
+                    <DropdownMenuSeparator />
                     <DropdownMenuItem
-                      className="text-muted-foreground"
+                      className="text-muted-foreground text-sm"
                       onClick={() => onSortChange(null)}
                     >
-                      <X className="h-3 w-3 mr-2" /> Clear Sort
+                      <X className="h-3 w-3 mr-2" /> Clear sort
                     </DropdownMenuItem>
                   </>
                 )}
@@ -383,8 +466,8 @@ export function GenericToolbar({
 
           {/* Add */}
           {showAddButton && onAdd && (
-            <Button onClick={onAdd} className="gap-2">
-              <Plus className="h-4 w-4" />
+            <Button size="sm" className="h-9 gap-1.5" onClick={onAdd}>
+              <Plus className="h-3.5 w-3.5" />
               {addButtonLabel}
             </Button>
           )}
@@ -393,19 +476,26 @@ export function GenericToolbar({
           {showBulkActions && onToggleSelection && (
             <Button
               variant={selectionMode ? 'default' : 'outline'}
-              className="gap-2"
+              size="sm"
+              className="h-9 gap-1.5"
               onClick={onToggleSelection}
             >
-              <Check className="h-4 w-4" />
-              <span className="hidden sm:inline">
-                {selectionMode ? 'Cancel Selection' : 'Select'}
+              <Check className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline text-sm">
+                {selectionMode ? 'Cancel' : 'Select'}
               </span>
             </Button>
           )}
 
           {/* Custom actions */}
           {customActions.map((a) => (
-            <Button key={a.id} variant={a.variant ?? 'outline'} onClick={a.onClick} className="gap-2">
+            <Button
+              key={a.id}
+              variant={a.variant ?? 'outline'}
+              size="sm"
+              className="h-9 gap-1.5"
+              onClick={a.onClick}
+            >
               {a.icon}
               {a.label}
             </Button>
@@ -413,10 +503,32 @@ export function GenericToolbar({
         </div>
       </div>
 
-      {/* ── Active filter tags ── */}
+      {/* ── Bulk-actions bar — shown while selectionMode is active ── */}
+      {showBulkActions && selectionMode && (
+        <div className="flex items-center gap-2 rounded-md border bg-muted/40 px-3 py-1.5">
+          <span className="text-sm text-muted-foreground mr-1">
+            {selectedCount} selected
+          </span>
+          {bulkActions.map((a) => (
+            <Button
+              key={a.id}
+              variant={a.variant ?? 'outline'}
+              size="sm"
+              className="h-7 gap-1.5 text-xs"
+              onClick={a.onClick}
+              disabled={selectedCount === 0}
+            >
+              {a.icon}
+              {a.label}
+            </Button>
+          ))}
+        </div>
+      )}
+
+      {/* ── Active filter tags — shown when panel is closed but filters are active ── */}
       {activeCount > 0 && !filtersOpen && (
-        <div className="flex items-center gap-2 flex-wrap">
-          {activeFilters.map((f) => (
+        <div className="flex items-center gap-1.5 flex-wrap">
+          {userFilters.filter(isFilterActive).map((f) => (
             <FilterTag
               key={f.filterId}
               filter={f}
@@ -424,64 +536,39 @@ export function GenericToolbar({
               onRemove={() => removeFilter(f.filterId)}
             />
           ))}
-          <Button variant="ghost" size="sm" className="h-6 text-xs" onClick={clearAllFilters}>
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-6 px-2 text-xs text-primary border-primary/40 hover:bg-primary/10 hover:text-primary"
+            onClick={clearAllFilters}
+          >
+            <X className="h-3 w-3 mr-1" />
             Clear all
           </Button>
         </div>
       )}
 
-      {/* ── Filters panel ── */}
+      {/* ── Filter panel (Basic / Advanced) ── */}
       {showFilters && filtersOpen && (
-        <Card className="p-4 space-y-3 border-border/50">
-          <div className="flex items-center justify-between">
-            <span className="text-sm font-semibold">Filters</span>
-            {activeCount > 0 && (
-              <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={clearAllFilters}>
-                Clear all
-              </Button>
-            )}
-          </div>
-
-          {/* Available filter chips */}
-          <div className="flex flex-wrap gap-2">
-            {availableFilters.map((field) => {
-              const active = !!activeFilters.find((f) => f.filterId === field.id);
-              return (
-                <button
-                  key={field.id}
-                  onClick={() => (active ? removeFilter(field.id) : addFilter(field))}
-                  className={cn(
-                    'text-xs px-2.5 py-1 rounded-full border transition-colors',
-                    active
-                      ? 'bg-primary text-primary-foreground border-primary'
-                      : 'bg-background border-border hover:border-primary'
-                  )}
-                >
-                  {field.label}
-                </button>
-              );
-            })}
-          </div>
-
-          {/* Active filter controls */}
-          {activeFilters.length > 0 && (
-            <div className="space-y-2 pt-1">
-              {activeFilters.map((f) => {
-                const field = availableFilters.find((af) => af.id === f.filterId);
-                if (!field) return null;
-                return (
-                  <BasicFilterRow
-                    key={f.filterId}
-                    filter={f}
-                    field={field}
-                    onChange={updateFilter}
-                    onRemove={() => removeFilter(f.filterId)}
-                  />
-                );
-              })}
-            </div>
-          )}
-        </Card>
+        <FilterPanel
+          availableFilters={availableFilters}
+          activeFilters={userFilters}
+          onFiltersChange={(filters) => {
+            // Merge user filters with external filters
+            const externalFilters: ActiveFilter[] = [];
+            externalFilterControllers.forEach((controller) => {
+              controller.representedFilters.forEach((rf) => {
+                externalFilters.push({
+                  filterId: rf.filterId,
+                  operator: rf.operator,
+                  value: rf.value,
+                });
+              });
+            });
+            onFiltersChange?.([...externalFilters, ...filters]);
+          }}
+          onClose={() => setFiltersOpen(false)}
+        />
       )}
     </div>
   );

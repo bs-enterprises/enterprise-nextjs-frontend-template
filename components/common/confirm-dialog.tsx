@@ -55,7 +55,7 @@ export function ConfirmDialog({
             disabled={isLoading}
             className={cn(
               variant === 'destructive' &&
-                'bg-destructive text-destructive-foreground hover:bg-destructive/90'
+                'bg-secondary text-secondary-foreground hover:bg-secondary/80 border border-border'
             )}
           >
             {isLoading ? (

@@ -32,9 +32,15 @@ export interface AppShellProps {
   menuCategories?: MenuCategory[];
   headerContent?: ReactNode;
   logo?: ReactNode;
+  /** Compact logo/mark shown in the sidebar header when sidebar is collapsed (ignored when useMenuPicker=true) */
+  collapsedLogo?: ReactNode;
   brandName?: string;
   brandSubtitle?: string;
   children: ReactNode;
+  /** Logo rendered at the bottom of the sidebar when expanded */
+  bottomLogo?: ReactNode;
+  /** Compact logo/mark shown at the bottom of the sidebar when collapsed */
+  collapsedBottomLogo?: ReactNode;
   loadingBar?: ReactNode;
   collapsed?: boolean;
   onCollapsedChange?: (collapsed: boolean) => void;
@@ -53,6 +59,9 @@ export function AppShell({
   menuCategories = [],
   headerContent,
   logo,
+  collapsedLogo,
+  bottomLogo,
+  collapsedBottomLogo,
   brandName = 'App',
   brandSubtitle,
   children,
@@ -90,6 +99,9 @@ export function AppShell({
     allMenuItems,
     pinnedMenuIds,
     logo,
+    collapsedLogo,
+    bottomLogo,
+    collapsedBottomLogo,
     brandName,
     brandSubtitle,
     onToggleSidebar: () => setCollapsed(!collapsed),
@@ -165,16 +177,16 @@ export function AppShell({
 
         <main
           className={cn(
-            'min-h-screen pt-[5rem] px-4 pb-4 sm:px-6 sm:pb-6 lg:px-8 lg:pb-8',
+            'min-h-screen pt-[5.5rem] px-3 pb-3 sm:px-4 sm:pb-4 lg:px-6 lg:pb-[1.5rem]',
             contentClassName
           )}
         >
           {enableTransitions ? (
             <motion.div
               key={pathname}
-              initial={{ opacity: 0, y: 8 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.2, ease: 'easeOut' }}
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              transition={{ duration: 0.18, ease: 'easeOut' }}
             >
               {children}
             </motion.div>
@@ -224,48 +236,64 @@ interface NavItemProps {
 function NavItem({ item, collapsed, pathname, onClose, depth = 0 }: NavItemProps) {
   const hasChildren = (item.children?.length ?? 0) > 0;
   const childActive = hasChildren && isAnyChildActive(item, pathname);
-  const [open, setOpen] = useState(() => item.defaultOpen ?? childActive);
+  const [open, setOpen] = useState(true);
   const active = isItemActive(item, pathname);
-
-  // If a child becomes active later (e.g. browser navigation), auto-open
-  // We use a simple effect: when childActive flips to true and we're not open, open.
-  if (childActive && !open && !collapsed) {
-    setOpen(true);
-  }
+  // open/closed state is fully user-controlled after mount — no force-reopen on active child.
 
   if (hasChildren) {
+    const isParentActive = childActive || active;
+    const firstChildHref = item.children![0].href;
+
+    const groupHeaderClass = cn(
+      'flex items-center gap-3 h-10 px-3 rounded-md text-sm w-full',
+      'transition-colors duration-150',
+      isParentActive
+        ? 'bg-primary text-primary-foreground font-semibold shadow-sm'
+        : 'text-muted-foreground hover:bg-muted/50 hover:text-foreground',
+      collapsed && 'justify-center'
+    );
+
     return (
       <div>
-        {/* Group header button */}
-        <button
-          onClick={() => !collapsed && setOpen((o) => !o)}
-          title={collapsed ? item.label : undefined}
-          className={cn(
-            'flex items-center gap-3 h-10 px-3 rounded-md text-sm w-full',
-            'transition-colors duration-150',
-            (childActive || active)
-              ? 'text-foreground font-medium'
-              : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground',
-            collapsed && 'justify-center'
-          )}
-        >
-          <item.icon className={cn('shrink-0', collapsed ? 'h-5 w-5' : 'h-[18px] w-[18px]')} />
-          {!collapsed && (
-            <>
+        {/* When collapsed: clicking navigates to first child */}
+        {collapsed ? (
+          <Link
+            href={firstChildHref}
+            onClick={onClose}
+            title={item.label}
+            className={groupHeaderClass}
+          >
+            <item.icon className="h-5 w-5 shrink-0" />
+          </Link>
+        ) : (
+          /* Expanded: left side navigates to first child, right chevron toggles */
+          <div className={cn(groupHeaderClass, 'cursor-default')}>
+            <Link
+              href={firstChildHref}
+              onClick={onClose}
+              className="flex items-center gap-3 flex-1 min-w-0"
+            >
+              <item.icon className="h-[18px] w-[18px] shrink-0" />
               <span className="truncate flex-1 text-left">{item.label}</span>
+            </Link>
+            <button
+              onClick={() => setOpen((o) => !o)}
+              className="shrink-0 p-0.5 rounded opacity-70 hover:opacity-100"
+              aria-label="Toggle submenu"
+            >
               <ChevronDown
                 className={cn(
-                  'h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform duration-200',
+                  'h-3.5 w-3.5 transition-transform duration-200',
                   open && 'rotate-180'
                 )}
               />
-            </>
-          )}
-        </button>
+            </button>
+          </div>
+        )}
 
         {/* Children */}
         {!collapsed && open && (
-          <div className="ml-3 pl-3 border-l border-border/40 space-y-0.5 mt-0.5 mb-1">
+          <div className="ml-3 pl-3 border-l border-primary/30 space-y-0.5 mt-0.5 mb-1">
             {item.children!.map((child) => (
               <NavItem
                 key={child.id}
@@ -295,7 +323,7 @@ function NavItem({ item, collapsed, pathname, onClose, depth = 0 }: NavItemProps
           ? depth > 0
             ? 'bg-primary/10 text-primary font-medium'
             : 'bg-primary text-primary-foreground font-medium shadow-sm'
-          : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground',
+          : 'text-muted-foreground hover:bg-muted/50 hover:text-foreground',
         collapsed && 'justify-center',
         depth > 0 && 'text-[13px]'
       )}
@@ -313,6 +341,9 @@ interface SidebarContentProps {
   pinnedMenuIds: string[];
   collapsed: boolean;
   logo?: ReactNode;
+  collapsedLogo?: ReactNode;
+  bottomLogo?: ReactNode;
+  collapsedBottomLogo?: ReactNode;
   brandName: string;
   brandSubtitle?: string;
   onToggleSidebar: () => void;
@@ -328,6 +359,9 @@ function AppShellSidebarContent({
   pinnedMenuIds,
   collapsed,
   logo,
+  collapsedLogo,
+  bottomLogo,
+  collapsedBottomLogo,
   brandName,
   brandSubtitle,
   onToggleSidebar,
@@ -351,25 +385,28 @@ function AppShellSidebarContent({
   return (
     <div className="flex h-full flex-col w-full">
       {/* Sidebar Header */}
-      <div className="flex h-16 shrink-0 items-center gap-2.5 border-b border-border/50 px-3">
+      <div className="flex h-16 shrink-0 items-center gap-2 border-b border-border/50 px-3">
+        {/* Collapsed: render collapsedLogo prop (only when menuPicker is not shown) */}
+        {collapsed && !useMenuPicker && collapsedLogo && (
+          <div className="mx-auto flex items-center justify-center rounded-lg border border-border/60 shrink-0 select-none">
+            {collapsedLogo}
+          </div>
+        )}
+
         {useMenuPicker && !collapsed && (
           <Button
             variant="ghost"
             size="icon"
             onClick={onOpenMenuPicker}
-            className="shrink-0 h-8 w-8"
+            className="shrink-0 h-8 w-8 hover:bg-muted/50 hover:text-foreground"
             title="All menus"
           >
             <Grid3x3 className="h-4 w-4" />
           </Button>
         )}
 
-        {logo && (
-          <div className={cn('shrink-0', collapsed && 'mx-auto')}>{logo}</div>
-        )}
-
         {!collapsed && (
-          <div className="flex flex-col min-w-0 flex-1">
+          <div className="flex flex-col min-w-0 flex-1 pl-1">
             <span className="text-sm font-semibold truncate leading-tight">{brandName}</span>
             {brandSubtitle && (
               <span className="text-[11px] text-muted-foreground truncate leading-tight mt-0.5">
@@ -383,7 +420,7 @@ function AppShellSidebarContent({
           variant="ghost"
           size="icon"
           onClick={onCloseMobileMenu}
-          className="lg:hidden shrink-0 h-8 w-8"
+          className="lg:hidden shrink-0 h-8 w-8 hover:bg-muted/50 hover:text-foreground"
         >
           <X className="h-4 w-4" />
         </Button>
@@ -407,14 +444,28 @@ function AppShellSidebarContent({
         </div>
       </nav>
 
+      {/* Bottom area: expanded shows bottomLogo, collapsed shows collapsedBottomLogo */}
+      {(bottomLogo || collapsedBottomLogo) && (
+        <div className="shrink-0 border-b border-border/50 flex items-center justify-center">
+          {collapsed
+            ? collapsedBottomLogo && (
+                <div className="flex items-center justify-center select-none">
+                  {collapsedBottomLogo}
+                </div>
+              )
+            : bottomLogo
+          }
+        </div>
+      )}
+
       {/* Collapse button */}
       {showCollapseButton && (
-        <div className="p-3 shrink-0 border-t border-border/50">
+        <div className={cn('p-3 shrink-0', !(bottomLogo || collapsedBottomLogo) && 'border-t border-border/50')}>
           <Button
             variant="ghost"
             size="sm"
             onClick={onToggleSidebar}
-            className="w-full justify-center gap-2 h-9 text-muted-foreground hover:text-foreground"
+            className="w-full justify-center gap-2 h-9 text-muted-foreground hover:bg-muted/50 hover:text-foreground"
           >
             {collapsed ? (
               <ChevronRight className="h-4 w-4" />
@@ -454,7 +505,7 @@ function AppShellHeader({ onMobileMenuToggle, collapsed, headerContent }: AppShe
         variant="ghost"
         size="icon"
         onClick={onMobileMenuToggle}
-        className="lg:hidden shrink-0"
+        className="lg:hidden shrink-0 hover:bg-muted/50 hover:text-foreground"
         aria-label="Open menu"
       >
         <Menu className="h-5 w-5" />
@@ -513,7 +564,7 @@ function MenuPickerSheet({
     return (
       <div
         key={item.id}
-        className="flex items-center gap-1 rounded-md hover:bg-accent group pr-1"
+        className="flex items-center gap-1 rounded-md hover:bg-muted/50 group pr-1"
       >
         <Link
           href={item.href}
